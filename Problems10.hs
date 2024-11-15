@@ -108,7 +108,10 @@ subst x m (Var y)
   | otherwise = Var y
 subst x m (Lam y n) = Lam y (substUnder x m y n)
 subst x m (App n1 n2) = App (subst x m n1) (subst x m n2)
-subst x m n = undefined
+subst x m (Store n) = Store (subst x m n)
+subst _ _ Recall = Recall
+subst x m (Throw n) = Throw (subst x m n)
+subst x m (Catch n1 y n2) = Catch (subst x m n1) y (substUnder x m y n2)
 
 {-------------------------------------------------------------------------------
 
@@ -202,7 +205,48 @@ bubble; this won't *just* be `Throw` and `Catch.
 -------------------------------------------------------------------------------}
 
 smallStep :: (Expr, Expr) -> Maybe (Expr, Expr)
-smallStep = undefined
+smallStep (Const i, acc) = Nothing  -- Constants don't step further
+
+-- Arithmetic: Plus
+smallStep (Plus (Const i) (Const j), acc) = Just (Const (i + j), acc)
+smallStep (Plus (Const i) n, acc) = case smallStep (n, acc) of
+                                      Just (n', acc') -> Just (Plus (Const i) n', acc')
+                                      Nothing -> Nothing
+smallStep (Plus n1 n2, acc) = case smallStep (n1, acc) of
+                                Just (n1', acc') -> Just (Plus n1' n2, acc')
+                                Nothing -> Nothing
+
+-- Lambda calculus: Variable, Lambda, and Application
+smallStep (Var x, acc) = Nothing  -- Variables don't step
+smallStep (Lam x n, acc) = Nothing  -- Lambdas don't step by themselves
+smallStep (App (Lam x n) v, acc) | isValue v = Just (subst x v n, acc)
+smallStep (App n1 n2, acc) 
+  | isValue n1 = case smallStep (n2, acc) of
+                    Just (n2', acc') -> Just (App n1 n2', acc')
+                    Nothing -> Nothing
+  | otherwise = case smallStep (n1, acc) of
+                  Just (n1', acc') -> Just (App n1' n2, acc')
+                  Nothing -> Nothing
+
+-- Accumulator: Store and Recall
+smallStep (Store (Const i), _) = Just (Const i, Const i)  -- Update accumulator
+smallStep (Store n, acc) = case smallStep (n, acc) of
+                             Just (n', acc') -> Just (Store n', acc')
+                             Nothing -> Nothing
+smallStep (Recall, acc) = Just (acc, acc)
+
+-- Exceptions: Throw
+smallStep (Throw (Const i), acc) = Just (Throw (Const i), acc)  -- Throw is ready to bubble
+smallStep (Throw n, acc) = case smallStep (n, acc) of
+                             Just (n', acc') -> Just (Throw n', acc')
+                             Nothing -> Nothing
+
+-- Exceptions: Catch
+smallStep (Catch (Const v) y n, acc) = Just (Const v, acc)  -- Catch completed successfully
+smallStep (Catch (Throw (Const w)) y n, acc) = Just (subst y (Const w) n, acc)  -- Handle exception
+smallStep (Catch m y n, acc) = case smallStep (m, acc) of
+                                 Just (m', acc') -> Just (Catch m' y n, acc')
+                                 Nothing -> Nothing
 
 steps :: (Expr, Expr) -> [(Expr, Expr)]
 steps s = case smallStep s of
